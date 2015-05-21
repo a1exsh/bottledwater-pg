@@ -2,17 +2,28 @@
 #include "format-json.h"
 #include "funcapi.h"
 #include "access/htup_details.h"
+#include "catalog/pg_type.h"
+#include "miscadmin.h"
+#include "parser/parse_coerce.h"
+#include "utils/builtins.h"
+#include "utils/date.h"
+#include "utils/datetime.h"
 #include "utils/json.h"
+#include "utils/jsonapi.h"
 #include "utils/lsyscache.h"
 
 #include "io_util.h"
 #include "protocol_server.h"
+
+/* String to output for infinite dates and timestamps */
+#define DT_INFINITY "\"infinity\""
 
 static void output_json_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt, bool is_init);
 static void output_json_shutdown(LogicalDecodingContext *ctx);
 static void output_json_begin_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn);
 static void output_json_commit_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn, XLogRecPtr commit_lsn);
 static void output_json_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn, Relation rel, ReorderBufferChange *change);
+static void output_json_tuple(StringInfo out, HeapTuple tuple, TupleDesc desc);
 
 
 void output_format_json_init(OutputPluginCallbacks *cb) {
@@ -48,8 +59,6 @@ static void output_json_commit_txn(LogicalDecodingContext *ctx, ReorderBufferTXN
 static void output_json_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
         Relation rel, ReorderBufferChange *change) {
     HeapTuple oldtuple = NULL, newtuple = NULL;
-    Datum olddatum = NULL, newdatum = NULL, oldjson = NULL, newjson = NULL;
-    text *oldtext = NULL, *newtext = NULL;
     const char *command = NULL;
 
     switch (change->action) {
@@ -85,17 +94,6 @@ static void output_json_change(LogicalDecodingContext *ctx, ReorderBufferTXN *tx
             elog(ERROR, "output_json_change: unknown change action %d", change->action);
     }
 
-    if (newtuple) {
-        newdatum = heap_copy_tuple_as_datum(newtuple, RelationGetDescr(rel));
-        newjson = DirectFunctionCall1(row_to_json, newdatum);
-        newtext = DatumGetTextP(newjson);
-    }
-    if (oldtuple) {
-        olddatum = heap_copy_tuple_as_datum(oldtuple, RelationGetDescr(rel));
-        oldjson = DirectFunctionCall1(row_to_json, olddatum);
-        oldtext = DatumGetTextP(oldjson);
-    }
-
     OutputPluginPrepareWrite(ctx, true);
     appendStringInfo(ctx->out, "{ \"xid\": %u, \"wal_pos\": \"%X/%X\"",
                      txn->xid, (uint32) (change->lsn >> 32), (uint32) change->lsn);
@@ -104,12 +102,188 @@ static void output_json_change(LogicalDecodingContext *ctx, ReorderBufferTXN *tx
     appendStringInfo(ctx->out, ", \"relnamespace\": \"%s\"", get_namespace_name(RelationGetNamespace(rel)));
     if (newtuple) {
         appendStringInfoString(ctx->out, ", \"newtuple\": ");
-        appendBinaryStringInfo(ctx->out, VARDATA_ANY(newtext), VARSIZE_ANY_EXHDR(newtext));
+        output_json_tuple(ctx->out, newtuple, RelationGetDescr(rel));
     }
     if (oldtuple) {
         appendStringInfoString(ctx->out, ", \"oldtuple\": ");
-        appendBinaryStringInfo(ctx->out, VARDATA_ANY(oldtext), VARSIZE_ANY_EXHDR(oldtext));
+        output_json_tuple(ctx->out, oldtuple, RelationGetDescr(rel));
     }
     appendStringInfoString(ctx->out, " }");
     OutputPluginWrite(ctx, true);
+}
+
+/* most of the following code is taken from utils/adt/json.c and put into one function */
+static void output_json_tuple(StringInfo out, HeapTuple tuple, TupleDesc desc) {
+    int i;
+
+    appendStringInfoChar(out, '{');
+
+    for (i = 0; i < desc->natts; i++) {
+        Form_pg_attribute attr = desc->attrs[i];
+        Datum val;
+        bool isnull;
+        Oid typoid;
+        Oid outfuncoid;
+        bool typisvarlena;
+        char *outputstr = NULL;
+
+        if (attr->attisdropped) {
+            continue;
+        }
+        if (i != 0) {
+            appendStringInfoChar(out, ',');
+        }
+
+        escape_json(out, NameStr(attr->attname));
+        appendStringInfoChar(out, ':');
+
+        val = heap_getattr(tuple, i + 1, desc, &isnull);
+        if (isnull) {
+            appendStringInfoString(out, "null");
+            continue;
+        }
+
+        typoid = getBaseType(attr->atttypid);
+        getTypeOutputInfo(typoid, &outfuncoid, &typisvarlena);
+
+        switch (typoid) {
+            case BOOLOID:
+                appendStringInfoString(out, DatumGetBool(val) ? "true" : "false");
+                break;
+
+            case INT2OID:
+            case INT4OID:
+            case FLOAT4OID:
+            case FLOAT8OID:
+                outputstr = OidOutputFunctionCall(outfuncoid, val);
+                if (IsValidJsonNumber(outputstr, strlen(outputstr))) {
+                    appendStringInfoString(out, outputstr);
+                } else {
+                    escape_json(out, outputstr);
+                }
+                break;
+
+            case INT8OID:
+            case NUMERICOID:
+                outputstr = OidOutputFunctionCall(outfuncoid, val);
+                escape_json(out, outputstr);
+                break;
+
+            case DATEOID:
+                {
+                    DateADT date;
+                    struct pg_tm tm;
+                    char buf[MAXDATELEN + 1];
+
+                    date = DatumGetDateADT(val);
+
+                    if (DATE_NOT_FINITE(date)) {
+                        /* we have to format infinity ourselves */
+                        appendStringInfoString(out, DT_INFINITY);
+                    } else {
+                        j2date(date + POSTGRES_EPOCH_JDATE,
+                               &(tm.tm_year), &(tm.tm_mon), &(tm.tm_mday));
+                        EncodeDateOnly(&tm, USE_XSD_DATES, buf);
+                        appendStringInfo(out, "\"%s\"", buf);
+                    }
+                }
+                break;
+
+            case TIMESTAMPOID:
+                {
+                    Timestamp timestamp;
+                    struct pg_tm tm;
+                    fsec_t fsec;
+                    char buf[MAXDATELEN + 1];
+
+                    timestamp = DatumGetTimestamp(val);
+
+                    if (TIMESTAMP_NOT_FINITE(timestamp)) {
+                        /* we have to format infinity ourselves */
+                        appendStringInfoString(out, DT_INFINITY);
+                    } else if (timestamp2tm(timestamp, NULL, &tm, &fsec, NULL, NULL) == 0) {
+                        EncodeDateTime(&tm, fsec, false, 0, NULL, USE_XSD_DATES, buf);
+                        appendStringInfo(out, "\"%s\"", buf);
+                    } else {
+                        ereport(ERROR,
+                                (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+                                 errmsg("timestamp out of range")));
+                    }
+                }
+                break;
+
+            case TIMESTAMPTZOID:
+                {
+                    TimestampTz timestamp;
+                    struct pg_tm tm;
+                    int  tz;
+                    fsec_t fsec;
+                    const char *tzn = NULL;
+                    char buf[MAXDATELEN + 1];
+
+                    timestamp = DatumGetTimestamp(val);
+
+                    if (TIMESTAMP_NOT_FINITE(timestamp)) {
+                        /* we have to format infinity ourselves */
+                        appendStringInfoString(out, DT_INFINITY);
+                    } else if (timestamp2tm(timestamp, &tz, &tm, &fsec, &tzn, NULL) == 0) {
+                        EncodeDateTime(&tm, fsec, true, tz, tzn, USE_XSD_DATES, buf);
+                        appendStringInfo(out, "\"%s\"", buf);
+                    } else {
+                        ereport(ERROR,
+                                (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+                                 errmsg("timestamp out of range")));
+                    }
+                }
+                break;
+
+            default:
+                {
+                    text *jsontext = NULL;
+
+                    if (OidIsValid(get_element_type(typoid))) {
+                        jsontext = DatumGetTextP(DirectFunctionCall1(array_to_json, val));
+                    }
+
+                    else if (type_is_rowtype(typoid)) {
+                        jsontext = DatumGetTextP(DirectFunctionCall1(row_to_json, val));
+                    }
+
+                    else if (typoid >= FirstNormalObjectId) {
+                        Oid castfuncoid;
+                        CoercionPathType ctype;
+
+                        ctype = find_coercion_pathway(JSONOID, typoid, COERCION_EXPLICIT,
+                                                      &castfuncoid);
+                        if (ctype == COERCION_PATH_FUNC && OidIsValid(castfuncoid)) {
+                            jsontext = DatumGetTextP(OidFunctionCall1(castfuncoid, val));
+                        }
+                    }
+
+                    if (jsontext) {
+                        outputstr = text_to_cstring(jsontext);
+                        pfree(jsontext);
+                    }
+
+                    if (outputstr) {
+                        /*
+                         * We assume anything produced by cast or
+                         * *_to_json() calls to return valid json:
+                         * don't escape it.
+                         */
+                        appendStringInfoString(out, outputstr);
+                    } else {
+                        outputstr = OidOutputFunctionCall(outfuncoid, val);
+                        escape_json(out, outputstr);
+                    }
+                }
+                break;
+        }
+
+        if (outputstr) {
+            pfree(outputstr);
+        }
+    }
+
+    appendStringInfoChar(out, '}');
 }
