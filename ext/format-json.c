@@ -23,7 +23,6 @@ static void output_json_shutdown(LogicalDecodingContext *ctx);
 static void output_json_begin_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn);
 static void output_json_commit_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn, XLogRecPtr commit_lsn);
 static void output_json_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn, Relation rel, ReorderBufferChange *change);
-static void output_json_tuple(StringInfo out, HeapTuple tuple, TupleDesc desc);
 
 
 void output_format_json_init(OutputPluginCallbacks *cb) {
@@ -113,7 +112,7 @@ static void output_json_change(LogicalDecodingContext *ctx, ReorderBufferTXN *tx
 }
 
 /* most of the following code is taken from utils/adt/json.c and put into one function */
-static void output_json_tuple(StringInfo out, HeapTuple tuple, TupleDesc desc) {
+void output_json_tuple(StringInfo out, HeapTuple tuple, TupleDesc desc) {
     int i;
 
     appendStringInfoChar(out, '{');

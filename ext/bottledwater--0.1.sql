@@ -15,3 +15,9 @@ CREATE OR REPLACE FUNCTION bottledwater_export(
         allow_unkeyed boolean DEFAULT false
     ) RETURNS setof bytea
     AS 'bottledwater', 'bottledwater_export' LANGUAGE C VOLATILE STRICT;
+
+CREATE OR REPLACE FUNCTION bottledwater_export_json(
+        relname text,
+        relnamespace text DEFAULT NULL
+    ) RETURNS setof text
+    AS 'bottledwater', 'bottledwater_export_json' LANGUAGE C VOLATILE;
