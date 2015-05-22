@@ -73,14 +73,9 @@ Datum bottledwater_export_json(PG_FUNCTION_ARGS) {
         rel = RelationIdGetRelation(reloid);
 
         initStringInfo(&state->template);
-        appendStringInfo(&state->template, 
-                         "{ \"xid\": 0" /* we're not decoding WAL actually */
-                         ", \"command\": \"INSERT\""
-                         ", \"relname\": \"%s\""
-                         ", \"relnamespace\": \"%s\""
-                         ", \"newtuple\": ",
-                         RelationGetRelationName(rel),
-                         get_namespace_name(RelationGetNamespace(rel)));
+
+        output_json_relation_header(&state->template, "INSERT", 0, 0, rel);
+        appendStringInfoString(&state->template, ", \"newtuple\": ");
 
         /* save the reset position at end of template */
         state->reset_len = state->template.len;

@@ -94,11 +94,8 @@ static void output_json_change(LogicalDecodingContext *ctx, ReorderBufferTXN *tx
     }
 
     OutputPluginPrepareWrite(ctx, true);
-    appendStringInfo(ctx->out, "{ \"xid\": %u, \"wal_pos\": \"%X/%X\"",
-                     txn->xid, (uint32) (change->lsn >> 32), (uint32) change->lsn);
-    appendStringInfo(ctx->out, ", \"command\": \"%s\"", command);
-    appendStringInfo(ctx->out, ", \"relname\": \"%s\"", RelationGetRelationName(rel));
-    appendStringInfo(ctx->out, ", \"relnamespace\": \"%s\"", get_namespace_name(RelationGetNamespace(rel)));
+
+    output_json_relation_header(ctx->out, command, txn->xid, change->lsn, rel);
     if (newtuple) {
         appendStringInfoString(ctx->out, ", \"newtuple\": ");
         output_json_tuple(ctx->out, newtuple, RelationGetDescr(rel));
@@ -108,7 +105,23 @@ static void output_json_change(LogicalDecodingContext *ctx, ReorderBufferTXN *tx
         output_json_tuple(ctx->out, oldtuple, RelationGetDescr(rel));
     }
     appendStringInfoString(ctx->out, " }");
+
     OutputPluginWrite(ctx, true);
+}
+
+void output_json_relation_header(StringInfo out, const char *cmd,
+                                 TransactionId xid, XLogRecPtr lsn, Relation rel) {
+    appendStringInfo(out,
+                     "{ \"command\": \"%s\""
+                     ", \"xid\": %u"
+                     ", \"wal_pos\": \"%X/%X\""
+                     ", \"relname\": \"%s\""
+                     ", \"relnamespace\": \"%s\"",
+                     cmd,
+                     xid,
+                     (uint32) (lsn >> 32), (uint32) lsn,
+                     RelationGetRelationName(rel),
+                     get_namespace_name(RelationGetNamespace(rel)));
 }
 
 /* most of the following code is taken from utils/adt/json.c and put into one function */
