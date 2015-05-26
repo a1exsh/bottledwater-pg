@@ -2,9 +2,13 @@
 #include "fmgr.h"
 #include "funcapi.h"
 #include "access/htup_details.h"
+#include "catalog/namespace.h"
+#include "catalog/pg_class.h"
+#include "catalog/pg_type.h"
 #include "executor/spi.h"
 #include "lib/stringinfo.h"
 #include "utils/builtins.h"
+#include "utils/json.h"
 #include "utils/lsyscache.h"
 #include "utils/typcache.h"
 
@@ -15,6 +19,80 @@ typedef struct {
     StringInfoData template;
     int reset_len;
 } export_json_state;
+
+
+PG_FUNCTION_INFO_V1(bottledwater_schema_json);
+
+Datum bottledwater_schema_json(PG_FUNCTION_ARGS) {
+    const char *relname;
+    const char *relnamespace;
+    Oid reloid;
+    Oid schemaoid;
+    Relation rel;
+    TupleDesc desc;
+    int i;
+    bool need_sep = false;
+    StringInfoData result;
+
+    if (PG_ARGISNULL(0)) {
+        elog(ERROR, "bottledwater_export_json: 'relname' cannot be null");
+    }
+    relname = text_to_cstring(PG_GETARG_TEXT_P(0));
+
+    if (PG_ARGISNULL(1)) {
+        reloid = RelnameGetRelid(relname);
+    } else {
+        relnamespace = text_to_cstring(PG_GETARG_TEXT_P(1));
+        schemaoid = LookupExplicitNamespace(relnamespace, false);
+        reloid = get_relname_relid(relname, schemaoid);
+    }
+
+    rel = relation_open(reloid, AccessShareLock);
+    desc = RelationGetDescr(rel);
+
+    initStringInfo(&result);
+
+    appendStringInfoString(&result, "{ \"relname\": ");
+    escape_json(&result, RelationGetRelationName(rel));
+
+    appendStringInfoString(&result, ", \"relnamespace\": ");
+    escape_json(&result, get_namespace_name(RelationGetNamespace(rel)));
+
+    appendStringInfoString(&result, ", \"attributes\": [");
+
+    for (i = 0; i < desc->natts; i++) {
+        Form_pg_attribute attr = desc->attrs[i];
+
+        if (attr->attisdropped) {
+            continue;
+        }
+        if (need_sep) {
+            appendStringInfoString(&result, ", ");
+        }
+        need_sep = true;
+
+        appendStringInfoString(&result, "{ \"name\": ");
+        escape_json(&result, NameStr(attr->attname));
+
+        appendStringInfoString(&result, ", \"type\": ");
+        if (attr->atttypmod != -1) {
+            escape_json(&result, format_type_with_typemod(attr->atttypid, attr->atttypmod));
+        } else {
+            escape_json(&result, format_type_be(attr->atttypid));
+        }
+
+        appendStringInfo(&result, ", \"notnull\": %s",
+                         attr->attnotnull ? "true" : "false");
+        // TODO: default
+
+        appendStringInfoString(&result, " }");
+    }
+    appendStringInfoString(&result, "] }");
+
+    relation_close(rel, AccessShareLock);
+    PG_RETURN_TEXT_P(cstring_to_text_with_len(result.data, result.len));
+}
+
 
 PG_FUNCTION_INFO_V1(bottledwater_export_json);
 
@@ -31,6 +109,10 @@ Datum bottledwater_export_json(PG_FUNCTION_ARGS) {
     Relation rel;
 
     if (SRF_IS_FIRSTCALL()) {
+        if (PG_ARGISNULL(0)) {
+            elog(ERROR, "bottledwater_export_json: 'relname' cannot be null");
+        }
+
         funcctx = SRF_FIRSTCALL_INIT();
 
         /* Initialize the SPI (server programming interface), which allows us to make SQL queries
@@ -52,11 +134,11 @@ Datum bottledwater_export_json(PG_FUNCTION_ARGS) {
         initStringInfo(&query);
         appendStringInfoString(&query, "SELECT * FROM ");
 
-        if (!PG_ARGISNULL(1)) {
+        if (PG_ARGISNULL(1)) {
+            relident = quote_identifier(text_to_cstring(PG_GETARG_TEXT_P(0)));
+        } else {
             relident = quote_qualified_identifier(text_to_cstring(PG_GETARG_TEXT_P(0)),
                                                   text_to_cstring(PG_GETARG_TEXT_P(1)));
-        } else {
-            relident = quote_identifier(text_to_cstring(PG_GETARG_TEXT_P(0)));
         }
         appendStringInfoString(&query, relident);
 

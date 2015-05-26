@@ -1,5 +1,6 @@
 *.o
 *.so
+/ext/config.h
 /client/bwtest
 /client/libbottledwater.a
 /kafka/bottledwater

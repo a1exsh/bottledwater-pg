@@ -1,8 +1,15 @@
+#include "config.h"
 #include "logdecoder.h"
+#ifdef AVRO
 #include "format-avro.h"
+#endif
+#ifdef JSON
 #include "format-json.h"
+#endif
 #include "nodes/parsenodes.h"
 #include "utils/elog.h"
+
+PG_MODULE_MAGIC;
 
 /* Entry point when Postgres loads the plugin */
 extern void _PG_init(void);
@@ -68,9 +75,21 @@ static void output_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt
               }
 
               if (strcasecmp(str, "AVRO") == 0) {
+#ifdef AVRO
                   format_init_func = output_format_avro_init;
+#else
+                  ereport(ERROR,
+                          (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                           errmsg("this version of bottledwater was built without AVRO format support")));
+#endif
               } else if (strcasecmp(str, "JSON") == 0) {
+#ifdef JSON
                   format_init_func = output_format_json_init;
+#else
+                  ereport(ERROR,
+                          (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                           errmsg("this version of bottledwater was built without JSON format support")));
+#endif
               } else {
                   ereport(ERROR,
                           (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -82,7 +101,13 @@ static void output_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt
 
     // use default format, if not created earlier
     if (!format_init_func) {
+#ifdef AVRO
         format_init_func = output_format_avro_init;
+#else
+        ereport(ERROR,
+                (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                 errmsg("specify the output format in the plugin options")));
+#endif
     }
     state->format_cb = palloc0(sizeof(OutputPluginCallbacks));
     format_init_func(state->format_cb);

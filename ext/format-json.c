@@ -5,15 +5,13 @@
 #include "catalog/pg_type.h"
 #include "miscadmin.h"
 #include "parser/parse_coerce.h"
+#include "replication/output_plugin.h"
 #include "utils/builtins.h"
 #include "utils/date.h"
 #include "utils/datetime.h"
 #include "utils/json.h"
 #include "utils/jsonapi.h"
 #include "utils/lsyscache.h"
-
-#include "io_util.h"
-#include "protocol_server.h"
 
 /* String to output for infinite dates and timestamps */
 #define DT_INFINITY "\"infinity\""
@@ -114,14 +112,16 @@ void output_json_relation_header(StringInfo out, const char *cmd,
     appendStringInfo(out,
                      "{ \"command\": \"%s\""
                      ", \"xid\": %u"
-                     ", \"wal_pos\": \"%X/%X\""
-                     ", \"relname\": \"%s\""
-                     ", \"relnamespace\": \"%s\"",
+                     ", \"wal_pos\": \"%X/%X\"",
                      cmd,
                      xid,
-                     (uint32) (lsn >> 32), (uint32) lsn,
-                     RelationGetRelationName(rel),
-                     get_namespace_name(RelationGetNamespace(rel)));
+                     (uint32) (lsn >> 32), (uint32) lsn);
+
+    appendStringInfoString(out, ", \"relname\": ");
+    escape_json(out, RelationGetRelationName(rel));
+
+    appendStringInfoString(out, ", \"relnamespace\": ");
+    escape_json(out, get_namespace_name(RelationGetNamespace(rel)));
 }
 
 /* most of the following code is taken from utils/adt/json.c and put into one function */
