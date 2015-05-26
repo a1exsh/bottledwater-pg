@@ -127,6 +127,7 @@ void output_json_relation_header(StringInfo out, const char *cmd,
 /* most of the following code is taken from utils/adt/json.c and put into one function */
 void output_json_tuple(StringInfo out, HeapTuple tuple, TupleDesc desc) {
     int i;
+    bool need_sep = false;
 
     appendStringInfoChar(out, '{');
 
@@ -142,9 +143,11 @@ void output_json_tuple(StringInfo out, HeapTuple tuple, TupleDesc desc) {
         if (attr->attisdropped) {
             continue;
         }
-        if (i != 0) {
+
+        if (need_sep) { /* can't count on i > 0, because of attisdropped just above */
             appendStringInfoChar(out, ',');
         }
+        need_sep = true;
 
         escape_json(out, NameStr(attr->attname));
         appendStringInfoChar(out, ':');
