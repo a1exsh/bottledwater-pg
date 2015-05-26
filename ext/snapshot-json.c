@@ -132,9 +132,10 @@ static char *get_attr_default_expression(Oid reloid, int16 attnum) {
 
     tup = systable_getnext(adscan);
 
-    if (!HeapTupleIsValid(tup))
-        elog(ERROR, "could not find tuple for adrelid %u, adnum %d",
+    if (!HeapTupleIsValid(tup)) {
+        elog(ERROR, "bottledwater_schema_json: could not find tuple for adrelid %u, adnum %d",
              reloid, attnum);
+    }
 
     adsrc = heap_getattr(tup, 4 /* adsrc column */, RelationGetDescr(attrdefDesc), &isnull);
     if (isnull || !adsrc) {
