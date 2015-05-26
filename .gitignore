@@ -1,6 +1,7 @@
 *.o
 *.so
 /ext/config.h
+/ext/bottledwater--0.1.sql
 /client/bwtest
 /client/libbottledwater.a
 /kafka/bottledwater

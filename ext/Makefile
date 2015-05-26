@@ -1,7 +1,7 @@
 MODULE_big = bottledwater
 EXTENSION = bottledwater
 
-OBJS = logdecoder.o snapshot.o
+OBJS = logdecoder.o
 DATA = bottledwater--0.1.sql
 
 ifdef AVRO
@@ -21,16 +21,32 @@ PG_CONFIG = pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 
-$(OBJS): make-config-h
+$(OBJS): config.h
 
-make-config-h:
+config.h:
 ifdef AVRO
-	  echo "#define AVRO" >config.h
+	  echo "#define AVRO" >$@
 else
-	  echo "#undef AVRO" >config.h
+	  echo "#undef AVRO" >$@
 endif
 ifdef JSON
-	  echo "#define JSON" >>config.h
+	  echo "#define JSON" >>$@
 else
-	  echo "#undef JSON" >>config.h
+	  echo "#undef JSON" >>$@
 endif
+
+install: bottledwater--0.1.sql
+
+bottledwater--0.1.sql:
+	cat bottledwater-common--0.1.sql >$@
+ifdef AVRO
+	cat bottledwater-avro--0.1.sql >>$@
+endif
+ifdef JSON
+	cat bottledwater-json--0.1.sql >>$@
+endif
+
+clean: clean-generated-files
+
+clean-generated-files:
+	rm -f config.h bottledwater--0.1.sql

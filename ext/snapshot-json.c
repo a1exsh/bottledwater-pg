@@ -3,11 +3,14 @@
 #include "funcapi.h"
 #include "access/htup_details.h"
 #include "catalog/namespace.h"
+#include "catalog/indexing.h"
+#include "catalog/pg_attrdef.h"
 #include "catalog/pg_class.h"
 #include "catalog/pg_type.h"
 #include "executor/spi.h"
 #include "lib/stringinfo.h"
 #include "utils/builtins.h"
+#include "utils/fmgroids.h"
 #include "utils/json.h"
 #include "utils/lsyscache.h"
 #include "utils/typcache.h"
@@ -19,6 +22,8 @@ typedef struct {
     StringInfoData template;
     int reset_len;
 } export_json_state;
+
+static char *get_attr_default_expression(Oid reloid, int16 attnum);
 
 
 PG_FUNCTION_INFO_V1(bottledwater_schema_json);
@@ -32,6 +37,7 @@ Datum bottledwater_schema_json(PG_FUNCTION_ARGS) {
     TupleDesc desc;
     int i;
     bool need_sep = false;
+    char *def_expr;
     StringInfoData result;
 
     if (PG_ARGISNULL(0)) {
@@ -83,7 +89,14 @@ Datum bottledwater_schema_json(PG_FUNCTION_ARGS) {
 
         appendStringInfo(&result, ", \"notnull\": %s",
                          attr->attnotnull ? "true" : "false");
-        // TODO: default
+
+        if (attr->atthasdef) {
+            def_expr = get_attr_default_expression(reloid, i+1);
+            if (def_expr != NULL) {
+                appendStringInfoString(&result, ", \"default\": ");
+                escape_json(&result, def_expr);
+            }
+        }
 
         appendStringInfoString(&result, " }");
     }
@@ -91,6 +104,49 @@ Datum bottledwater_schema_json(PG_FUNCTION_ARGS) {
 
     relation_close(rel, AccessShareLock);
     PG_RETURN_TEXT_P(cstring_to_text_with_len(result.data, result.len));
+}
+
+static char *get_attr_default_expression(Oid reloid, int16 attnum) {
+    Relation attrdefDesc;
+    ScanKeyData skey[2];
+    SysScanDesc adscan;
+    HeapTuple tup;
+    Datum adsrc;
+    bool isnull = false;
+    char *result;
+
+    attrdefDesc = heap_open(AttrDefaultRelationId, AccessShareLock);
+
+    ScanKeyInit(&skey[0],
+                Anum_pg_attrdef_adrelid,
+                BTEqualStrategyNumber, F_OIDEQ,
+                ObjectIdGetDatum(reloid));
+
+    ScanKeyInit(&skey[1],
+                Anum_pg_attrdef_adnum,
+                BTEqualStrategyNumber, F_INT2EQ,
+                Int16GetDatum(attnum));
+
+    adscan = systable_beginscan(attrdefDesc, AttrDefaultIndexId,
+                                true, NULL, 2, skey);
+
+    tup = systable_getnext(adscan);
+
+    if (!HeapTupleIsValid(tup))
+        elog(ERROR, "could not find tuple for adrelid %u, adnum %d",
+             reloid, attnum);
+
+    adsrc = heap_getattr(tup, 4 /* adsrc column */, RelationGetDescr(attrdefDesc), &isnull);
+    if (isnull || !adsrc) {
+        result = NULL;
+    } else {
+        result = text_to_cstring(DatumGetTextP(adsrc));
+    }
+
+    systable_endscan(adscan);
+    heap_close(attrdefDesc, AccessShareLock);
+
+    return result;
 }
 
 
@@ -137,8 +193,8 @@ Datum bottledwater_export_json(PG_FUNCTION_ARGS) {
         if (PG_ARGISNULL(1)) {
             relident = quote_identifier(text_to_cstring(PG_GETARG_TEXT_P(0)));
         } else {
-            relident = quote_qualified_identifier(text_to_cstring(PG_GETARG_TEXT_P(0)),
-                                                  text_to_cstring(PG_GETARG_TEXT_P(1)));
+            relident = quote_qualified_identifier(text_to_cstring(PG_GETARG_TEXT_P(1)),
+                                                  text_to_cstring(PG_GETARG_TEXT_P(0)));
         }
         appendStringInfoString(&query, relident);
 
