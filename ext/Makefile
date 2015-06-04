@@ -1,7 +1,7 @@
 MODULE_big = bottledwater
 EXTENSION = bottledwater
 
-OBJS = logdecoder.o
+OBJS = logdecoder.o oid_util.o
 DATA = bottledwater--0.1.sql
 
 ifdef AVRO

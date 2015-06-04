@@ -3,6 +3,7 @@
 
 #include "protocol_server.h"
 #include "io_util.h"
+#include "oid_util.h"
 #include "oid2avro.h"
 
 #include <stdarg.h>

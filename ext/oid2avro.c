@@ -1,4 +1,5 @@
 #include "io_util.h"
+#include "oid_util.h"
 #include "oid2avro.h"
 
 #include "funcapi.h"
@@ -38,46 +39,6 @@ int update_avro_with_interval(avro_value_t *record_val, Interval *interval);
 int update_avro_with_bytes(avro_value_t *output_val, bytea *bytes);
 int update_avro_with_char(avro_value_t *output_val, char c);
 int update_avro_with_string(avro_value_t *output_val, Oid typid, Datum pg_datum);
-
-
-/* Returns the relation object for the index that we're going to use as key for a
- * particular table. (Indexes are relations too!) Returns null if the table is unkeyed.
- * The return value is opened with a shared lock; call relation_close() when finished. */
-Relation table_key_index(Relation rel) {
-    char replident = rel->rd_rel->relreplident;
-    Oid repl_ident_oid;
-    List *indexes;
-    ListCell *index_oid;
-
-    if (replident == REPLICA_IDENTITY_NOTHING) {
-        return NULL;
-    }
-
-    if (replident == REPLICA_IDENTITY_INDEX) {
-        repl_ident_oid = RelationGetReplicaIndex(rel);
-        if (repl_ident_oid != InvalidOid) {
-            return relation_open(repl_ident_oid, AccessShareLock);
-        }
-    }
-
-    // There doesn't seem to be a convenient way of getting the primary key index for
-    // a table, so we have to iterate over all the table's indexes.
-    indexes = RelationGetIndexList(rel);
-
-    foreach(index_oid, indexes) {
-        Relation index_rel = relation_open(lfirst_oid(index_oid), AccessShareLock);
-        Form_pg_index index = index_rel->rd_index;
-
-        if (IndexIsValid(index) && IndexIsReady(index) && index->indisprimary) {
-            list_free(indexes);
-            return index_rel;
-        }
-        relation_close(index_rel, AccessShareLock);
-    }
-
-    list_free(indexes);
-    return NULL;
-}
 
 
 /* Generates an Avro schema for the key (replica identity or primary key)

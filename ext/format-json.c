@@ -1,5 +1,7 @@
 #include "logdecoder.h"
 #include "format-json.h"
+#include "oid_util.h"
+
 #include "funcapi.h"
 #include "access/htup_details.h"
 #include "catalog/pg_type.h"
@@ -63,6 +65,7 @@ static void output_json_commit_txn(LogicalDecodingContext *ctx, ReorderBufferTXN
 static void output_json_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
                                Relation rel, ReorderBufferChange *change) {
     HeapTuple oldtuple = NULL, newtuple = NULL;
+    Relation primary_key = NULL;
     const char *command = NULL;
 
     switch (change->action) {
@@ -101,6 +104,15 @@ static void output_json_change(LogicalDecodingContext *ctx, ReorderBufferTXN *tx
     OutputPluginPrepareWrite(ctx, true);
 
     output_json_common_header(ctx->out, command, txn->xid, change->lsn, rel);
+
+    primary_key = table_key_index(rel);
+    if (primary_key) {
+        appendStringInfoString(ctx->out, ", \"key\": ");
+        output_json_relation_key(ctx->out, primary_key);
+
+        relation_close(primary_key, AccessShareLock);
+    }
+
     if (newtuple) {
         appendStringInfoString(ctx->out, ", \"newtuple\": ");
         output_json_tuple(ctx->out, newtuple, RelationGetDescr(rel));
@@ -139,6 +151,29 @@ void output_json_common_header(StringInfo out, const char *cmd,
         appendStringInfoString(out, ", \"relnamespace\": ");
         escape_json(out, get_namespace_name(RelationGetNamespace(rel)));
     }
+}
+
+void output_json_relation_key(StringInfo out, Relation key) {
+    TupleDesc desc = RelationGetDescr(key);
+    int i, n = 0;
+
+    appendStringInfoChar(out, '[');
+
+    for (i = 0; i < desc->natts; i++) {
+        Form_pg_attribute attr = desc->attrs[i];
+
+        if (attr->attisdropped)
+            continue;
+
+        if (n > 0) {
+            appendStringInfoString(out, ", ");
+        }
+        n++;
+
+        escape_json(out, NameStr(attr->attname));
+    }
+
+    appendStringInfoChar(out, ']');
 }
 
 /* most of the following code is taken from utils/adt/json.c and put into one function */
