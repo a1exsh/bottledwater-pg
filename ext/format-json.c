@@ -3,6 +3,7 @@
 #include "funcapi.h"
 #include "access/htup_details.h"
 #include "catalog/pg_type.h"
+#include "commands/dbcommands.h"
 #include "miscadmin.h"
 #include "parser/parse_coerce.h"
 #include "replication/output_plugin.h"
@@ -42,19 +43,25 @@ static void output_json_shutdown(LogicalDecodingContext *ctx) {
 
 static void output_json_begin_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn) {
     OutputPluginPrepareWrite(ctx, true);
-    appendStringInfo(ctx->out, "{ \"command\": \"BEGIN\", \"xid\": %u }", txn->xid);
+
+    output_json_common_header(ctx->out, "BEGIN", txn->xid, InvalidXLogRecPtr, NULL);
+    appendStringInfoString(ctx->out, " }");
+
     OutputPluginWrite(ctx, true);
 }
 
 static void output_json_commit_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
-        XLogRecPtr commit_lsn) {
+                                   XLogRecPtr commit_lsn) {
     OutputPluginPrepareWrite(ctx, true);
-    appendStringInfo(ctx->out, "{ \"command\": \"COMMIT\", \"xid\": %u }", txn->xid);
+
+    output_json_common_header(ctx->out, "COMMIT", txn->xid, InvalidXLogRecPtr, NULL);
+    appendStringInfoString(ctx->out, " }");
+
     OutputPluginWrite(ctx, true);
 }
 
 static void output_json_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
-        Relation rel, ReorderBufferChange *change) {
+                               Relation rel, ReorderBufferChange *change) {
     HeapTuple oldtuple = NULL, newtuple = NULL;
     const char *command = NULL;
 
@@ -93,7 +100,7 @@ static void output_json_change(LogicalDecodingContext *ctx, ReorderBufferTXN *tx
 
     OutputPluginPrepareWrite(ctx, true);
 
-    output_json_relation_header(ctx->out, command, txn->xid, change->lsn, rel);
+    output_json_common_header(ctx->out, command, txn->xid, change->lsn, rel);
     if (newtuple) {
         appendStringInfoString(ctx->out, ", \"newtuple\": ");
         output_json_tuple(ctx->out, newtuple, RelationGetDescr(rel));
@@ -107,21 +114,31 @@ static void output_json_change(LogicalDecodingContext *ctx, ReorderBufferTXN *tx
     OutputPluginWrite(ctx, true);
 }
 
-void output_json_relation_header(StringInfo out, const char *cmd,
-                                 TransactionId xid, XLogRecPtr lsn, Relation rel) {
+void output_json_common_header(StringInfo out, const char *cmd,
+                               TransactionId xid, XLogRecPtr lsn,
+                               Relation rel) {
     appendStringInfo(out,
                      "{ \"command\": \"%s\""
-                     ", \"xid\": %u"
-                     ", \"wal_pos\": \"%X/%X\"",
-                     cmd,
-                     xid,
-                     (uint32) (lsn >> 32), (uint32) lsn);
+                     ", \"xid\": %u",
+                     cmd, xid);
 
-    appendStringInfoString(out, ", \"relname\": ");
-    escape_json(out, RelationGetRelationName(rel));
+    if (lsn != InvalidXLogRecPtr) {
+        appendStringInfo(out,
+                         ", \"wal_pos\": \"%X/%X\"",
+                         (uint32) (lsn >> 32),
+                         (uint32) lsn);
+    }
 
-    appendStringInfoString(out, ", \"relnamespace\": ");
-    escape_json(out, get_namespace_name(RelationGetNamespace(rel)));
+    appendStringInfoString(out, ", \"dbname\": ");
+    escape_json(out, get_database_name(MyDatabaseId));
+
+    if (rel) {
+        appendStringInfoString(out, ", \"relname\": ");
+        escape_json(out, RelationGetRelationName(rel));
+
+        appendStringInfoString(out, ", \"relnamespace\": ");
+        escape_json(out, get_namespace_name(RelationGetNamespace(rel)));
+    }
 }
 
 /* most of the following code is taken from utils/adt/json.c and put into one function */

@@ -213,7 +213,7 @@ Datum bottledwater_export_json(PG_FUNCTION_ARGS) {
 
         initStringInfo(&state->template);
 
-        output_json_relation_header(&state->template, "INSERT", 0, 0, rel);
+        output_json_common_header(&state->template, "INSERT", 0, 0, rel);
         appendStringInfoString(&state->template, ", \"newtuple\": ");
 
         /* save the reset position at end of template */
