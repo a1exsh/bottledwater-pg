@@ -126,7 +126,7 @@ void output_json_common_header(StringInfo out, const char *cmd,
         appendStringInfo(out,
                          ", \"wal_pos\": \"%X/%X\"",
                          (uint32) (lsn >> 32),
-                         (uint32) lsn);
+                         (uint32) (lsn & 0xFFFFFFFF));
     }
 
     appendStringInfoString(out, ", \"dbname\": ");
