@@ -41,7 +41,7 @@ Datum bottledwater_schema_json(PG_FUNCTION_ARGS) {
     StringInfoData result;
 
     if (PG_ARGISNULL(0)) {
-        elog(ERROR, "bottledwater_export_json: 'relname' cannot be null");
+        elog(ERROR, "bottledwater_schema_json: 'relname' cannot be null");
     }
     relname = text_to_cstring(PG_GETARG_TEXT_P(0));
 
@@ -51,6 +51,9 @@ Datum bottledwater_schema_json(PG_FUNCTION_ARGS) {
         relnamespace = text_to_cstring(PG_GETARG_TEXT_P(1));
         schemaoid = LookupExplicitNamespace(relnamespace, false);
         reloid = get_relname_relid(relname, schemaoid);
+    }
+    if (reloid == InvalidOid) {
+        elog(ERROR, "bottledwater_schema_json: relation not found");
     }
 
     rel = relation_open(reloid, AccessShareLock);
