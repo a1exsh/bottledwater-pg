@@ -119,6 +119,13 @@ def export_snapshot(master_curs, snapshot_name, writer, snapshot_policy, max_job
 def policy_export_all(relname, relnamespace):
     return True
 
+
+class ReplicationSlotExists(RuntimeError):
+    pass
+
+class ReplicationSlotDoesNotExist(RuntimeError):
+    pass
+
 #
 # Example of writer class for the export:
 #
@@ -156,9 +163,10 @@ def export(writer, dsn, slot_name, options=None, create_slot=False,
     restart_lsn = get_replication_slot_restart_lsn(curs, slot_name)
     if restart_lsn:
         print("Found existing replication slot.")
+
         if initial_snapshot:
-            print("Cannot make snapshot from existing replication slot.")
-            exit(1)
+            raise ReplicationSlotExists("Cannot make snapshot from existing replication slot.")
+
     else:
         print("Replication slot doesn't exist.")
 
@@ -168,8 +176,7 @@ def export(writer, dsn, slot_name, options=None, create_slot=False,
             replcurs.create_replication_slot(REPLICATION_LOGICAL, slot_name, "bottledwater")
             (name, restart_lsn, snapshot_name, plugin_name) = replcurs.fetchone()
         else:
-            print("Stopping.")
-            return
+            raise ReplicationSlotDoesNotExist("Replication slot doesn't exist.")
 
         if initial_snapshot:
             print("Exporting tables using snapshot %s %s (max. connections: %d)" %
