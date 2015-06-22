@@ -16,6 +16,7 @@
 #include "utils/typcache.h"
 
 #include "format-json.h"
+#include "oid_util.h"
 
 typedef struct {
     Portal cursor;
@@ -33,7 +34,7 @@ Datum bottledwater_schema_json(PG_FUNCTION_ARGS) {
     const char *relnamespace;
     Oid reloid;
     Oid schemaoid;
-    Relation rel;
+    Relation rel, pkey_index;
     TupleDesc desc;
     int i;
     bool need_sep = false;
@@ -66,6 +67,14 @@ Datum bottledwater_schema_json(PG_FUNCTION_ARGS) {
 
     appendStringInfoString(&result, ", \"relnamespace\": ");
     escape_json(&result, get_namespace_name(RelationGetNamespace(rel)));
+
+    pkey_index = table_key_index(rel);
+    if (pkey_index) {
+        appendStringInfoString(&result, ", \"key\": ");
+        output_json_relation_key(&result, pkey_index);
+
+        relation_close(pkey_index, AccessShareLock);
+    }
 
     appendStringInfoString(&result, ", \"attributes\": [");
 
@@ -166,7 +175,7 @@ Datum bottledwater_export_json(PG_FUNCTION_ARGS) {
     StringInfoData query;
     CachedPlanSource *plansrc;
     Oid reloid;
-    Relation rel;
+    Relation rel, pkey_index;
 
     if (SRF_IS_FIRSTCALL()) {
         if (PG_ARGISNULL(0)) {
@@ -217,6 +226,15 @@ Datum bottledwater_export_json(PG_FUNCTION_ARGS) {
         initStringInfo(&state->template);
 
         output_json_common_header(&state->template, "INSERT", 0, 0, rel);
+
+        pkey_index = table_key_index(rel);
+        if (pkey_index) {
+            appendStringInfoString(&state->template, ", \"key\": ");
+            output_json_relation_key(&state->template, pkey_index);
+
+            relation_close(pkey_index, AccessShareLock);
+        }
+
         appendStringInfoString(&state->template, ", \"newtuple\": ");
 
         /* save the reset position at end of template */

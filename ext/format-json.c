@@ -65,7 +65,7 @@ static void output_json_commit_txn(LogicalDecodingContext *ctx, ReorderBufferTXN
 static void output_json_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
                                Relation rel, ReorderBufferChange *change) {
     HeapTuple oldtuple = NULL, newtuple = NULL;
-    Relation primary_key = NULL;
+    Relation pkey_index = NULL;
     const char *command = NULL;
 
     switch (change->action) {
@@ -105,12 +105,12 @@ static void output_json_change(LogicalDecodingContext *ctx, ReorderBufferTXN *tx
 
     output_json_common_header(ctx->out, command, txn->xid, change->lsn, rel);
 
-    primary_key = table_key_index(rel);
-    if (primary_key) {
+    pkey_index = table_key_index(rel);
+    if (pkey_index) {
         appendStringInfoString(ctx->out, ", \"key\": ");
-        output_json_relation_key(ctx->out, primary_key);
+        output_json_relation_key(ctx->out, pkey_index);
 
-        relation_close(primary_key, AccessShareLock);
+        relation_close(pkey_index, AccessShareLock);
     }
 
     if (newtuple) {
