@@ -17,7 +17,10 @@ def wait_for_connections(conns):
             else:
                 raise psycopg2.OperationalError("poll() returned %s" % state)
 
-        select.select(rd, wr, xc)
+        try:
+            select.select(rd, wr, xc)
+        except InterruptedError as e:
+            print(repr(e))
 
 
 def get_export_table_list(curs):
