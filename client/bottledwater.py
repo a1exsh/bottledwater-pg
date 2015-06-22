@@ -148,7 +148,8 @@ class ReplicationSlotDoesNotExist(RuntimeError):
 #
 def export(writer, dsn, slot_name, options=None, create_slot=False,
            initial_snapshot=False, snapshot_policy=policy_export_all,
-           max_snapshot_jobs=1):
+           max_snapshot_jobs=1, reconnect_delay=10):
+    import time
     from psycopg2.extras import ReplicationConnection, REPLICATION_LOGICAL
 
     #
@@ -196,7 +197,20 @@ def export(writer, dsn, slot_name, options=None, create_slot=False,
     conn.close()
 
     print("Streaming changes on the replication slot: %s %s" % (slot_name, restart_lsn))
-    replcurs.start_replication(writer, REPLICATION_LOGICAL,
-                               slot_name=slot_name,
-                               start_lsn=restart_lsn,
-                               options=options)
+    while True:
+        try:
+            if replconn.closed:            
+                replconn = psycopg2.connect(dsn, connection_factory=ReplicationConnection)
+                replcurs = replconn.cursor()
+
+            replcurs.start_replication(writer, REPLICATION_LOGICAL,
+                                       slot_name=slot_name,
+                                       start_lsn=restart_lsn,
+                                       options=options)
+
+        except psycopg2.DatabaseError as e:
+            print(repr(e))
+            replconn.close()
+
+            print("Trying to re-attach to replication slot in 10 seconds...")
+            time.sleep(reconnect_delay)
