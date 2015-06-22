@@ -267,6 +267,8 @@ Datum bottledwater_export_json(PG_FUNCTION_ARGS) {
 
     appendStringInfoString(&state->template, " }");
 
+    SPI_freetuptable(SPI_tuptable);
+
     SRF_RETURN_NEXT(funcctx, PointerGetDatum(cstring_to_text_with_len(state->template.data,
                                                                       state->template.len)));
 }
