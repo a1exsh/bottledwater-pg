@@ -95,10 +95,15 @@ def export_snapshot(master_curs, snapshot_name, writer, snapshot_policy, max_job
                     curs = conn.cursor()
                     begin_snapshot_transaction(curs, snapshot_name)
                     active[conn] = curs
-
-                # now we have conn and curs objects: actually run the
-                # export statement
-                curs.execute("SELECT * FROM bottledwater_export_json(%s, %s)", tbl) # tuple
+                #
+                # Now we have conn and curs objects: actually run the
+                # export statement.
+                #
+                # NB: using "SELECT * FROM" would try to cache the
+                # whole result set on the server side before sending
+                # to us, so avoid it.
+                #
+                curs.execute("SELECT bottledwater_export_json(%s, %s)", tbl) # (tbl, nmsp)
 
         # wait for any of the active connections
         conn = wait_for_connections(active.keys())
