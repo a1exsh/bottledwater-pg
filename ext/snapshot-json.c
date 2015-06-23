@@ -13,12 +13,14 @@
 #include "utils/fmgroids.h"
 #include "utils/json.h"
 #include "utils/lsyscache.h"
+#include "utils/memutils.h"
 #include "utils/typcache.h"
 
 #include "format-json.h"
 #include "oid_util.h"
 
 typedef struct {
+    MemoryContext memcontext;
     Portal cursor;
     StringInfoData template;
     int reset_len;
@@ -176,6 +178,9 @@ Datum bottledwater_export_json(PG_FUNCTION_ARGS) {
     CachedPlanSource *plansrc;
     Oid reloid;
     Relation rel, pkey_index;
+    text *result;
+
+    oldcontext = CurrentMemoryContext;
 
     if (SRF_IS_FIRSTCALL()) {
         if (PG_ARGISNULL(0)) {
@@ -192,13 +197,19 @@ Datum bottledwater_export_json(PG_FUNCTION_ARGS) {
         }
 
         /* Things allocated in this memory context will live until SRF_RETURN_DONE(). */
-        oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+        MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 
         state = palloc(sizeof(export_json_state));
-        if (!state) {
-            elog(ERROR, "bottledwater_export_json: cannot allocate SRF state");
-        }
+
+        state->memcontext = AllocSetContextCreate(CurrentMemoryContext,
+                                                  "bottledwater_export_json per-tuple context",
+                                                  ALLOCSET_DEFAULT_MINSIZE,
+                                                  ALLOCSET_DEFAULT_INITSIZE,
+                                                  ALLOCSET_DEFAULT_MAXSIZE);
         funcctx->user_fctx = state;
+
+        /* we want the template string to live in the multi-call context specifically */
+        initStringInfo(&state->template);
 
         initStringInfo(&query);
         appendStringInfoString(&query, "SELECT * FROM ");
@@ -223,8 +234,7 @@ Datum bottledwater_export_json(PG_FUNCTION_ARGS) {
 
         rel = RelationIdGetRelation(reloid);
 
-        initStringInfo(&state->template);
-
+        /* make a JSON template for all output to base on */
         output_json_common_header(&state->template, "INSERT", 0, 0, rel);
 
         pkey_index = table_key_index(rel);
@@ -241,8 +251,6 @@ Datum bottledwater_export_json(PG_FUNCTION_ARGS) {
         state->reset_len = state->template.len;
 
         RelationClose(rel);
-
-        MemoryContextSwitchTo(oldcontext);
     }
 
     funcctx = SRF_PERCALL_SETUP();
@@ -260,6 +268,12 @@ Datum bottledwater_export_json(PG_FUNCTION_ARGS) {
         elog(ERROR, "bottledwater_export_json: expected exactly 1 row from cursor, but got %d rows", SPI_processed);
     }
 
+    /* SPI_cursor_fetch() leaves us in the SPI mem. context */
+    MemoryContextSwitchTo(state->memcontext);
+
+    /* clear any prior tuple result memory */
+    MemoryContextReset(state->memcontext);
+
     /* reset template length before spitting next tuple */
     state->template.len = state->reset_len;
 
@@ -267,8 +281,13 @@ Datum bottledwater_export_json(PG_FUNCTION_ARGS) {
 
     appendStringInfoString(&state->template, " }");
 
+    /* finally allocate the result, while still in the per-tuple context */
+    result = cstring_to_text_with_len(state->template.data, state->template.len);
+
+    MemoryContextSwitchTo(oldcontext);
+
+    /* don't forget to clear the SPI temp context */
     SPI_freetuptable(SPI_tuptable);
 
-    SRF_RETURN_NEXT(funcctx, PointerGetDatum(cstring_to_text_with_len(state->template.data,
-                                                                      state->template.len)));
+    SRF_RETURN_NEXT(funcctx, PointerGetDatum(result));
 }
