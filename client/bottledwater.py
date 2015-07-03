@@ -146,7 +146,7 @@ class ReplicationSlotDoesNotExist(RuntimeError):
 #         self.save_message(msg)
 #
 #         if self.saved_reliably(msg):
-#             msg.cursor.sync_server(msg.wal_end)
+#             msg.cursor.send_replication_feedback(flush_lsn=msg.wal_end)
 #
 # writer = SampleBottledwaterWriter()
 # bottledwater.export(writer, dsn, slot, options={'format': 'json'})
@@ -208,8 +208,9 @@ def export(writer, dsn, slot_name, options=None, create_slot=False,
                 replconn = psycopg2.connect(dsn, connection_factory=ReplicationConnection)
                 replcurs = replconn.cursor()
 
-            replcurs.start_replication(writer, REPLICATION_LOGICAL,
+            replcurs.start_replication(REPLICATION_LOGICAL,
                                        slot_name=slot_name,
+                                       writer=writer,
                                        start_lsn=restart_lsn,
                                        options=options)
 
