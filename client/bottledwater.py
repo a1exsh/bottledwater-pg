@@ -152,7 +152,7 @@ class ReplicationSlotDoesNotExist(RuntimeError):
 # bottledwater.export(consumer, dsn, slot_name, options={'format': 'json'})
 #
 def export(consumer, dsn, slot_name, options=None, create_slot=False,
-           initial_snapshot=False, snapshot_policy=policy_export_all,
+           decode=True, initial_snapshot=False, snapshot_policy=policy_export_all,
            max_snapshot_jobs=1, reconnect_delay=10):
     import time
     from psycopg2.extras import LogicalReplicationConnection
@@ -211,7 +211,7 @@ def export(consumer, dsn, slot_name, options=None, create_slot=False,
             replcurs.start_replication(slot_name=slot_name,
                                        start_lsn=restart_lsn,
                                        options=options)
-            replcurs.consume_stream(consumer)
+            replcurs.consume_stream(consumer, decode=decode)
 
         except psycopg2.DatabaseError as e:
             print(repr(e))
