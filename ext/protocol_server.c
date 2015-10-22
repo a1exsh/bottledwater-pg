@@ -7,7 +7,9 @@
 #include "oid2avro.h"
 
 #include <stdarg.h>
+#include <string.h>
 #include "access/heapam.h"
+#include "lib/stringinfo.h"
 #include "utils/lsyscache.h"
 
 int extract_tuple_key(schema_cache_entry *entry, Relation rel, TupleDesc tupdesc, HeapTuple tuple, bytea **key_out);
@@ -22,6 +24,7 @@ void schema_cache_entry_decrefs(schema_cache_entry *entry);
 uint64 fnv_hash(uint64 base, char *str, int len);
 uint64 fnv_format(uint64 base, char *fmt, ...) __attribute__ ((format (printf, 2, 3)));
 uint64 schema_hash_for_relation(Relation rel);
+void tupdesc_debug_info(StringInfo msg, TupleDesc tupdesc);
 
 /* http://www.isthe.com/chongo/tech/comp/fnv/index.html#FNV-param */
 #define FNV_HASH_BASE UINT64CONST(0xcbf29ce484222325)
@@ -104,26 +107,38 @@ int update_frame_with_insert(avro_value_t *frame_val, schema_cache_t cache, Rela
 int update_frame_with_update(avro_value_t *frame_val, schema_cache_t cache, Relation rel, HeapTuple oldtuple, HeapTuple newtuple) {
     int err = 0;
     schema_cache_entry *entry;
-    bytea *key_bin = NULL, *old_bin = NULL, *new_bin = NULL;
+    bytea *old_bin = NULL, *new_bin = NULL, *old_key_bin = NULL, *new_key_bin = NULL;
 
     int changed = schema_cache_lookup(cache, rel, &entry);
     if (changed) {
         check(err, update_frame_with_table_schema(frame_val, entry));
     }
 
+    /* oldtuple is non-NULL when replident = FULL, or when replident = DEFAULT and there is no
+     * primary key, or replident = DEFAULT and the primary key was not modified by the update. */
     if (oldtuple) {
+        check(err, extract_tuple_key(entry, rel, RelationGetDescr(rel), oldtuple, &old_key_bin));
         check(err, avro_value_reset(&entry->row_value));
         check(err, tuple_to_avro_row(&entry->row_value, RelationGetDescr(rel), oldtuple));
         check(err, try_writing(&old_bin, &write_avro_binary, &entry->row_value));
     }
 
-    check(err, extract_tuple_key(entry, rel, RelationGetDescr(rel), newtuple, &key_bin));
+    check(err, extract_tuple_key(entry, rel, RelationGetDescr(rel), newtuple, &new_key_bin));
     check(err, avro_value_reset(&entry->row_value));
     check(err, tuple_to_avro_row(&entry->row_value, RelationGetDescr(rel), newtuple));
     check(err, try_writing(&new_bin, &write_avro_binary, &entry->row_value));
-    check(err, update_frame_with_update_raw(frame_val, RelationGetRelid(rel), key_bin, old_bin, new_bin));
 
-    if (key_bin) pfree(key_bin);
+    if (old_key_bin != NULL && (VARSIZE(old_key_bin) != VARSIZE(new_key_bin) ||
+            memcmp(VARDATA(old_key_bin), VARDATA(new_key_bin), VARSIZE(new_key_bin) - VARHDRSZ) != 0)) {
+        /* If the primary key changed, turn the update into a delete and an insert. */
+        check(err, update_frame_with_delete_raw(frame_val, RelationGetRelid(rel), old_key_bin, old_bin));
+        check(err, update_frame_with_insert_raw(frame_val, RelationGetRelid(rel), new_key_bin, new_bin));
+    } else {
+        check(err, update_frame_with_update_raw(frame_val, RelationGetRelid(rel), new_key_bin, old_bin, new_bin));
+    }
+
+    if (old_key_bin) pfree(old_key_bin);
+    if (new_key_bin) pfree(new_key_bin);
     if (old_bin) pfree(old_bin);
     pfree(new_bin);
     return err;
@@ -439,4 +454,45 @@ uint64 schema_hash_for_relation(Relation rel) {
     }
 
     return hash;
+}
+
+/* Append debug information about table columns to a string buffer. */
+void tupdesc_debug_info(StringInfo msg, TupleDesc tupdesc) {
+    for (int i = 0; i < tupdesc->natts; i++) {
+        Form_pg_attribute attr = tupdesc->attrs[i];
+        appendStringInfo(msg, "\n\t%4d. attrelid = %u, attname = %s, atttypid = %u, attlen = %d, "
+                "attnum = %d, attndims = %d, atttypmod = %d, attnotnull = %d, "
+                "atthasdef = %d, attisdropped = %d, attcollation = %u",
+                i, attr->attrelid, NameStr(attr->attname), attr->atttypid, attr->attlen,
+                attr->attnum, attr->attndims, attr->atttypmod, attr->attnotnull,
+                attr->atthasdef, attr->attisdropped, attr->attcollation);
+    }
+}
+
+/* Returns a palloc'ed string with information about a table schema, for debugging. */
+char *schema_debug_info(Relation rel, TupleDesc tupdesc) {
+    StringInfoData msg;
+    initStringInfo(&msg);
+    appendStringInfo(&msg, "relation oid=%u name=%s ns=%s relkind=%c",
+            RelationGetRelid(rel),
+            RelationGetRelationName(rel),
+            get_namespace_name(RelationGetNamespace(rel)),
+            RelationGetForm(rel)->relkind);
+
+    if (!tupdesc) tupdesc = RelationGetDescr(rel);
+    tupdesc_debug_info(&msg, tupdesc);
+
+    if (RelationGetForm(rel)->relkind == RELKIND_RELATION) {
+        Relation index_rel = table_key_index(rel);
+        if (index_rel) {
+            appendStringInfo(&msg, "\nreplica identity index: oid=%u name=%s ns=%s",
+                    RelationGetRelid(index_rel),
+                    RelationGetRelationName(index_rel),
+                    get_namespace_name(RelationGetNamespace(index_rel)));
+            tupdesc_debug_info(&msg, RelationGetDescr(index_rel));
+            relation_close(index_rel, AccessShareLock);
+        }
+    }
+
+    return msg.data;
 }
