@@ -55,7 +55,7 @@ def begin_snapshot_transaction(curs, snapshot_name):
     wait_for_connections([curs.connection])
 
 
-def export_snapshot(master_curs, snapshot_name, writer, snapshot_policy, max_jobs=1):
+def export_snapshot(master_curs, snapshot_name, consumer, snapshot_policy, max_jobs=1):
     master_conn = master_curs.connection
 
     begin_snapshot_transaction(master_curs, snapshot_name)
@@ -111,7 +111,7 @@ def export_snapshot(master_curs, snapshot_name, writer, snapshot_policy, max_job
 
         row = curs.fetchone()
         if row:
-            writer.write(psycopg2.extras.ReplicationMessage(curs, row[0]))
+            consumer(psycopg2.extras.ReplicationMessage(curs, row[0]))
         else:
             active.pop(conn)
             idle[conn] = curs
@@ -135,27 +135,27 @@ class ReplicationSlotDoesNotExist(RuntimeError):
     pass
 
 #
-# Example of writer class for the export:
+# Example of consumer class for the export:
 #
-# class SampleBottledwaterWriter(TextIOBase):
+# class SampleBottledwaterConsumer(object):
 #
-#     def write(self, msg):
+#     def __call__(self, msg):
 #         print(msg.send_time)
 #         print(msg.payload)
 #
 #         self.save_message(msg)
 #
 #         if self.saved_reliably(msg):
-#             msg.cursor.send_replication_feedback(flush_lsn=msg.wal_end)
+#             msg.cursor.send_feedback(flush_lsn=msg.data_start)
 #
-# writer = SampleBottledwaterWriter()
-# bottledwater.export(writer, dsn, slot, options={'format': 'json'})
+# consumer = SampleBottledwaterConsumer()
+# bottledwater.export(consumer, dsn, slot_name, options={'format': 'json'})
 #
-def export(writer, dsn, slot_name, options=None, create_slot=False,
+def export(consumer, dsn, slot_name, options=None, create_slot=False,
            initial_snapshot=False, snapshot_policy=policy_export_all,
            max_snapshot_jobs=1, reconnect_delay=10):
     import time
-    from psycopg2.extras import ReplicationConnection, REPLICATION_LOGICAL
+    from psycopg2.extras import LogicalReplicationConnection
 
     #
     # We need to open two connections: one for regular queries (check
@@ -166,7 +166,7 @@ def export(writer, dsn, slot_name, options=None, create_slot=False,
     wait_for_connections([conn])
     curs = conn.cursor()
 
-    replconn = psycopg2.connect(dsn, connection_factory=ReplicationConnection)
+    replconn = psycopg2.connect(dsn, connection_factory=LogicalReplicationConnection)
     replcurs = replconn.cursor()
 
     restart_lsn = get_replication_slot_restart_lsn(curs, slot_name)
@@ -182,7 +182,7 @@ def export(writer, dsn, slot_name, options=None, create_slot=False,
         if create_slot:
             print("Creating logical replication slot %s for bottledwater..." % slot_name)
 
-            replcurs.create_replication_slot(REPLICATION_LOGICAL, slot_name, "bottledwater")
+            replcurs.create_replication_slot(slot_name, output_plugin="bottledwater")
             (name, restart_lsn, snapshot_name, plugin_name) = replcurs.fetchone()
         else:
             raise ReplicationSlotDoesNotExist("Replication slot doesn't exist.")
@@ -192,7 +192,7 @@ def export(writer, dsn, slot_name, options=None, create_slot=False,
                   (snapshot_name, restart_lsn, max_snapshot_jobs))
 
             try:
-                export_snapshot(curs, snapshot_name, writer, snapshot_policy,
+                export_snapshot(curs, snapshot_name, consumer, snapshot_policy,
                                 max_jobs=max_snapshot_jobs)
             except:
                 replcurs.drop_replication_slot(slot_name)
@@ -205,14 +205,13 @@ def export(writer, dsn, slot_name, options=None, create_slot=False,
     while True:
         try:
             if replconn.closed:            
-                replconn = psycopg2.connect(dsn, connection_factory=ReplicationConnection)
+                replconn = psycopg2.connect(dsn, connection_factory=LogicalReplicationConnection)
                 replcurs = replconn.cursor()
 
-            replcurs.start_replication(REPLICATION_LOGICAL,
-                                       slot_name=slot_name,
-                                       writer=writer,
+            replcurs.start_replication(slot_name=slot_name,
                                        start_lsn=restart_lsn,
                                        options=options)
+            replcurs.consume_stream(consumer)
 
         except psycopg2.DatabaseError as e:
             print(repr(e))
