@@ -11,4 +11,5 @@ sed -i.old \
     "${PGDATA}/postgresql.conf"
 
 # TODO authenticate the user
-echo "host replication all 0.0.0.0/0 trust" >> "${PGDATA}/pg_hba.conf"
+echo "local replication all           trust" >> "${PGDATA}/pg_hba.conf"
+echo "host  replication all 0.0.0.0/0 trust" >> "${PGDATA}/pg_hba.conf"

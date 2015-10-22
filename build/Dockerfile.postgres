@@ -4,8 +4,8 @@
 #
 # Usage:
 #
-#   docker build -f build/Dockerfile.postgres -t confluent/postgres-bw:0.1 .
-#   docker run -d --name postgres confluent/postgres-bw:0.1
+#   docker build -f build/Dockerfile.postgres -t zalando/postgres-bw:0.1 .
+#   docker run -d --name postgres zalando/postgres-bw:0.1
 #
 # To connect to the running container with psql:
 #
@@ -15,10 +15,29 @@
 # In the psql session, type the following to enable the plugin:
 #
 #   create extension bottledwater;
+#
+# If you want to try Python support, do this:
+#
+#   docker run -it --rm --link postgres:postgres zalando/postgres-bw:0.1 \
+#     sh -c 'PGHOST="$POSTGRES_PORT_5432_TCP_ADDR" PGPORT="$POSTGRES_PORT_5432_TCP_PORT" PGUSER=postgres exec python /root/bwtest.py'
+#
+# You can also use python3.  Replace python command with 'bash' to
+# edit the sample client bwtest.py before running it, or you can run
+# python interactively.
+#
 
 FROM postgres:9.4
 
+RUN apt-get update && \
+    apt-get install -y \
+        python3 \
+        vim-tiny \
+        nano
+
 ADD bottledwater-ext.tar.gz /
+ADD psycopg2-replication.tar.gz /
 ADD avro-1.7.7.tar.gz /
 RUN cp /usr/local/lib/libavro.so.22.0.0 /usr/lib/x86_64-linux-gnu/libavro.so.22.0.0
+
 COPY build/replication-config.sh /docker-entrypoint-initdb.d/replication-config.sh
+COPY client/*.py /root/
