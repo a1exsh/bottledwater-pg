@@ -22,6 +22,7 @@
 typedef struct {
     MemoryContext memcontext;
     Portal cursor;
+    TupleDesc tupdesc;
     StringInfoData template;
     int reset_len;
 } export_json_state;
@@ -233,6 +234,7 @@ Datum bottledwater_export_json(PG_FUNCTION_ARGS) {
         reloid = plansrc->relationOids->head->data.oid_value;
 
         rel = RelationIdGetRelation(reloid);
+        state->tupdesc = RelationGetDescr(rel);
 
         /* make a JSON template for all output to base on */
         output_json_common_header(&state->template, "INSERT", 0, 0, rel);
@@ -277,7 +279,8 @@ Datum bottledwater_export_json(PG_FUNCTION_ARGS) {
     /* reset template length before spitting next tuple */
     state->template.len = state->reset_len;
 
-    output_json_tuple(&state->template, SPI_tuptable->vals[0], SPI_tuptable->tupdesc);
+    /* NB: using descriptor obtained from the relation to avoid registering a record type */
+    output_json_tuple(&state->template, SPI_tuptable->vals[0], state->tupdesc);
 
     appendStringInfoString(&state->template, " }");
 
