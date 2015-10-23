@@ -55,7 +55,8 @@ def begin_snapshot_transaction(curs, snapshot_name):
     wait_for_connections([curs.connection])
 
 
-def export_snapshot(master_curs, snapshot_name, consumer, snapshot_policy, max_jobs=1):
+def export_snapshot(master_curs, snapshot_name, consumer, snapshot_policy, format=None,
+                    max_jobs=1):
     master_conn = master_curs.connection
 
     begin_snapshot_transaction(master_curs, snapshot_name)
@@ -103,7 +104,12 @@ def export_snapshot(master_curs, snapshot_name, consumer, snapshot_policy, max_j
                 # whole result set on the server side before sending
                 # to us, so avoid it.
                 #
-                curs.execute("SELECT bottledwater_export_json(%s, %s)", tbl) # (tbl, nmsp)
+                # tbl = tuple(table, namespace)
+                if format.upper() == 'JSON':
+                    curs.execute("SELECT bottledwater_export_json(%s, %s)", tbl)
+                else:
+                    curs.execute("SELECT bottledwater_export(%s)",
+                                 ("%s.%s" % tuple(reversed(tbl)),))
 
         # wait for any of the active connections
         conn = wait_for_connections(active.keys())
@@ -149,10 +155,10 @@ class ReplicationSlotDoesNotExist(RuntimeError):
 #             msg.cursor.send_feedback(flush_lsn=msg.data_start)
 #
 # consumer = SampleBottledwaterConsumer()
-# bottledwater.export(consumer, dsn, slot_name, options={'format': 'json'})
+# bottledwater.export(consumer, dsn, slot_name, format='JSON'})
 #
-def export(consumer, dsn, slot_name, options=None, create_slot=False,
-           decode=True, initial_snapshot=False, snapshot_policy=policy_export_all,
+def export(consumer, dsn, slot_name, create_slot=False, format='JSON',
+           initial_snapshot=False, snapshot_policy=policy_export_all,
            max_snapshot_jobs=1, reconnect_delay=10):
     import time
     from psycopg2.extras import LogicalReplicationConnection
@@ -193,7 +199,7 @@ def export(consumer, dsn, slot_name, options=None, create_slot=False,
 
             try:
                 export_snapshot(curs, snapshot_name, consumer, snapshot_policy,
-                                max_jobs=max_snapshot_jobs)
+                                format=format, max_jobs=max_snapshot_jobs)
             except:
                 replcurs.drop_replication_slot(slot_name)
                 raise
@@ -208,10 +214,10 @@ def export(consumer, dsn, slot_name, options=None, create_slot=False,
                 replconn = psycopg2.connect(dsn, connection_factory=LogicalReplicationConnection)
                 replcurs = replconn.cursor()
 
-            replcurs.start_replication(slot_name=slot_name,
-                                       start_lsn=restart_lsn,
-                                       options=options)
-            replcurs.consume_stream(consumer, decode=decode)
+            replcurs.start_replication(slot_name=slot_name, start_lsn=restart_lsn,
+                                       options={ 'format': format },
+                                       decode=(format.upper() == 'JSON'))
+            replcurs.consume_stream(consumer)
 
         except psycopg2.DatabaseError as e:
             print(repr(e))

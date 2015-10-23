@@ -6,4 +6,5 @@ def consume(msg):
         msg.cursor.send_feedback(flush_lsn=msg.data_start)
 
 bottledwater.export(consume, 'dbname=postgres', slot_name='bwtest', create_slot=True,
-                    options={ 'format': 'JSON' })
+                    initial_snapshot=False,
+                    format='JSON')
