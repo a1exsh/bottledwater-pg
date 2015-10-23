@@ -14,7 +14,7 @@
 #   docker cp bwbuild:/bottledwater-bin.tar.gz .
 #
 #   (If you want to try python support, also do this:)
-#   docker cp bwbuild:psycopg2-replication.tar.gz
+#   docker cp bwbuild:psycopg2-replication.tar.gz .
 #
 #   (Now type `exit` in the bash shell above.)
 #
