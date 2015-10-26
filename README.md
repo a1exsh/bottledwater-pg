@@ -17,6 +17,31 @@ a data warehouse, calculate analytics, monitor it for fraud, and so on.
 * [Watch a short demo!](http://showterm.io/fde6260d684ee3a6ee692)
 
 
+What's different in this branch
+-------------------------------
+
+This experimental branch adds a JSON output format for the logical decoding plugin and a Python
+client library for rapid consumer prototyping.
+
+To use the JSON format you just need to compile the plugin like this:
+
+    $ make JSON=1 -C ext
+
+To use the Python client you need to grab and compile a modified version of psycopg2 from here:
+https://github.com/zalando/psycopg2/tree/feature/replication-protocol
+
+Then you can try the test Python client provided in `client/bwtest.py`.
+
+For a really quick start you can also use a pre-built Docker image:
+
+    $ docker run -d --name pg zalando/postgres-bw:0.1
+    
+    $ docker run -it --rm --link pg:pg zalando/postgres-bw:0.1 \
+      sh -c 'PGHOST="$PG_PORT_5432_TCP_ADDR" \
+             PGPORT="$PG_PORT_5432_TCP_PORT" PGUSER=postgres \
+             exec python /root/bwtest.py'
+
+
 How it works
 ------------
 
