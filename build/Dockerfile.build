@@ -20,7 +20,7 @@
 #
 # See the other Dockerfiles in this directory for using those build artifacts.
 
-FROM postgres:9.4
+FROM postgres:9.5
 
 RUN apt-get update && \
     apt-get install -y \
@@ -29,9 +29,9 @@ RUN apt-get update && \
         curl \
         libcurl4-openssl-dev \
         libjansson-dev \
-        libpq-dev \
+        libpq-dev=$PG_VERSION \
         pkg-config \
-        postgresql-server-dev-9.4
+        postgresql-server-dev-$PG_MAJOR=$PG_VERSION
 
 # Avro
 RUN curl -o /root/avro-c-1.7.7.tar.gz -SL http://archive.apache.org/dist/avro/avro-1.7.7/c/avro-c-1.7.7.tar.gz && \
@@ -52,7 +52,7 @@ RUN curl -o /root/librdkafka-0.8.6.tar.gz -SL https://github.com/edenhill/librdk
 COPY . /root/bottledwater
 RUN cd /root/bottledwater && \
     make clean && make JSON=1 AVRO=1 && make JSON=1 AVRO=1 install && cd / && \
-    tar czf bottledwater-ext.tar.gz usr/lib/postgresql/9.4/lib/bottledwater.so usr/share/postgresql/9.4/extension/bottledwater* && \
+    tar czf bottledwater-ext.tar.gz usr/lib/postgresql/${PG_MAJOR}/lib/bottledwater.so usr/share/postgresql/${PG_MAJOR}/extension/bottledwater* && \
     cp /root/bottledwater/kafka/bottledwater /root/bottledwater/client/bwtest /usr/local/bin && \
     tar czf bottledwater-bin.tar.gz usr/local/bin/bottledwater usr/local/bin/bwtest
 
