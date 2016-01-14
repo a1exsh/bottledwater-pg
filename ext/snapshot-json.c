@@ -215,6 +215,10 @@ Datum bottledwater_export_json(PG_FUNCTION_ARGS) {
         initStringInfo(&query);
         appendStringInfoString(&query, "SELECT * FROM ");
 
+        /* Exclude data from children tables? */
+        if (PG_GETARG_BOOL(2))
+            appendStringInfoString(&query, " ONLY");
+
         if (PG_ARGISNULL(1)) {
             relident = quote_identifier(text_to_cstring(PG_GETARG_TEXT_P(0)));
         } else {
