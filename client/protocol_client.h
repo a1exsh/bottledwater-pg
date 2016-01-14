@@ -2,7 +2,8 @@
 #define PROTOCOL_CLIENT_H
 
 #include "protocol.h"
-#include "postgres_ext.h"
+
+#include <internal/c.h>
 
 /* Parameters: context, wal_pos, xid */
 typedef int (*begin_txn_cb)(void *, uint64_t, uint32_t);
