@@ -23,17 +23,18 @@ def wait_for_connections(conns):
             print(repr(e))
 
 
-def get_export_table_list(curs):
+def get_export_table_list(curs, exclude_children=False):
     curs.execute("""
 SELECT c.relname, n.nspname
 
   FROM pg_catalog.pg_class c
   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+  LEFT JOIN pg_catalog.pg_inherits inh ON inh.inhrelid = c.oid
 
  WHERE c.relkind = 'r'
    AND n.nspname NOT LIKE 'pg_%%' AND n.nspname <> 'information_schema'
    AND c.relpersistence = 'p'
-""")
+""" + ("   AND inh.inhparent IS NULL" if exclude_children else ""))
     wait_for_connections([curs.connection])
     return curs.fetchall()
 
