@@ -24,17 +24,44 @@ def wait_for_connections(conns):
 
 
 def get_export_table_list(curs, exclude_children=False):
+
+    if exclude_children:
+        select = """
+SELECT toprelnamespace AS relnamespace, toprelname AS relname,
+       SUM(relpages) AS relpages
+  FROM tree
+ GROUP BY toprelnamespace, toprelname
+"""
+    else:
+        select = "SELECT relnamespace, relname, relpages FROM tree"
+
     curs.execute("""
-SELECT c.relname, n.nspname
+WITH RECURSIVE tree(toprelnamespace, toprelname, relid, relnamespace, relname, relpages) AS
+(
+  SELECT n.nspname AS toprelnamespace, p.relname AS toprelname, p.oid AS relid,
+         n.nspname AS relnamespace, p.relname, p.relpages
 
-  FROM pg_catalog.pg_class c
-  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-  LEFT JOIN pg_catalog.pg_inherits inh ON inh.inhrelid = c.oid
+    FROM pg_catalog.pg_class p
+    JOIN pg_catalog.pg_namespace n ON p.relnamespace = n.oid
+    LEFT JOIN pg_catalog.pg_inherits i ON i.inhrelid = p.oid
 
- WHERE c.relkind = 'r'
-   AND n.nspname NOT LIKE 'pg_%%' AND n.nspname <> 'information_schema'
-   AND c.relpersistence = 'p'
-""" + ("   AND inh.inhparent IS NULL" if exclude_children else ""))
+   WHERE n.nspname NOT LIKE 'pg_%%' AND n.nspname <> 'information_schema'
+     AND p.relkind = 'r' AND p.relpersistence = 'p'
+     AND i.inhrelid IS NULL
+
+UNION ALL
+
+  SELECT t.toprelnamespace, t.toprelname, c.oid AS relid,
+         n.nspname AS relnamespace, c.relname, c.relpages
+
+    FROM tree t
+    JOIN pg_catalog.pg_inherits i ON i.inhparent = t.relid
+    JOIN pg_catalog.pg_class c ON i.inhrelid = c.oid
+    JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+)
+{select}
+""".format(select=select))
+
     wait_for_connections([curs.connection])
     return curs.fetchall()
 
@@ -83,7 +110,7 @@ def export_snapshot(master_curs, snapshot_name, consumer, snapshot_policy, forma
         while tables and (idle or len(active) < max_jobs):
 
             tbl = tables.pop(0)
-            if snapshot_policy(*tbl):
+            if snapshot_policy(**tbl):
                 print("next table: %s" % repr(tbl))
 
                 if idle:
@@ -105,12 +132,12 @@ def export_snapshot(master_curs, snapshot_name, consumer, snapshot_policy, forma
                 # whole result set on the server side before sending
                 # to us, so avoid it.
                 #
-                # tbl = tuple(table, namespace)
+                # tbl = { 'relnamespace': ..., 'relname': ..., 'relpages': ... }
                 if format.upper() == 'JSON':
-                    curs.execute("SELECT bottledwater_export_json(%s, %s)", tbl)
+                    curs.execute("SELECT bottledwater_export_json(%(relnamespace)s, %(relname)s)", tbl)
                 else:
                     curs.execute("SELECT bottledwater_export(%s)",
-                                 ("%s.%s" % tuple(reversed(tbl)),))
+                                 ("{relnamespace}.{relname}".format(**tbl),))
 
         # wait for any of the active connections
         conn = wait_for_connections(active.keys())
@@ -131,7 +158,7 @@ def export_snapshot(master_curs, snapshot_name, consumer, snapshot_policy, forma
     #master_conn.commit()
 
 
-def policy_export_all(relname, relnamespace):
+def policy_export_all(relname=None, relnamespace=None, **kwargs):
     return True
 
 
@@ -162,7 +189,7 @@ def export(consumer, dsn, slot_name, create_slot=False, format='JSON',
            initial_snapshot=False, snapshot_policy=policy_export_all,
            max_snapshot_jobs=1, reconnect_delay=10):
     import time
-    from psycopg2.extras import LogicalReplicationConnection
+    from psycopg2.extras import LogicalReplicationConnection, DictCursor
 
     #
     # We need to open two connections: one for regular queries (check
@@ -174,7 +201,7 @@ def export(consumer, dsn, slot_name, create_slot=False, format='JSON',
     curs = conn.cursor()
 
     replconn = psycopg2.connect(dsn, connection_factory=LogicalReplicationConnection)
-    replcurs = replconn.cursor()
+    replcurs = replconn.cursor(cursor_factory=DictCursor)
 
     restart_lsn = get_replication_slot_restart_lsn(curs, slot_name)
     if restart_lsn:
