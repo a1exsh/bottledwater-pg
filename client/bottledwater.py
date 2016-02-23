@@ -198,10 +198,10 @@ def export(consumer, dsn, slot_name, create_slot=False, format='JSON',
     #
     conn = psycopg2.connect(dsn, async=True)
     wait_for_connections([conn])
-    curs = conn.cursor()
+    curs = conn.cursor(cursor_factory=DictCursor)
 
     replconn = psycopg2.connect(dsn, connection_factory=LogicalReplicationConnection)
-    replcurs = replconn.cursor(cursor_factory=DictCursor)
+    replcurs = replconn.cursor()
 
     restart_lsn = get_replication_slot_restart_lsn(curs, slot_name)
     if restart_lsn:
